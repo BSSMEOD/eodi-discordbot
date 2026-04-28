@@ -5,32 +5,13 @@ import {
   ButtonStyle,
   ChatInputCommandInteraction,
   GuildMember,
-  ModalBuilder,
-  ModalSubmitInteraction,
   PermissionFlagsBits,
   RESTPostAPIChatInputApplicationCommandsJSONBody,
   SlashCommandBuilder,
-  TextInputBuilder,
-  TextInputStyle,
 } from "discord.js";
 
 const NICKNAME_PATTERN = /^\d+기_[^_]+$/;
-export const VERIFY_STUDENT_MODAL_ID = "verify-student-id-modal";
 export const VERIFY_START_BUTTON_ID = "verify-start";
-export const VERIFY_STUDENT_BUTTON_ID = "verify-request-student-id";
-
-type VerifyPayload = {
-  studentId?: string;
-  nickname: string;
-  discordUserId: string;
-};
-
-type VerifyResult = {
-  code?: string;
-  message?: string;
-  status?: string;
-  requiresStudentId?: boolean;
-};
 
 export const verifyCommand = new SlashCommandBuilder()
   .setName("verify")
@@ -55,8 +36,7 @@ export async function handleVerify(
     return;
   }
 
-  await interaction.deferReply({ ephemeral: true });
-  await submitVerification(interaction, context.nickname);
+  await sendOAuthLink(interaction);
 }
 
 export async function handleVerifyPanel(
@@ -84,110 +64,47 @@ export async function handleVerifyStartButton(
     return;
   }
 
+  await sendOAuthLink(interaction);
+}
+
+async function sendOAuthLink(
+  interaction: ChatInputCommandInteraction | ButtonInteraction,
+): Promise<void> {
   await interaction.deferReply({ ephemeral: true });
-  await submitVerification(interaction, context.nickname);
+
+  try {
+    const url = await fetchOAuthUrl(interaction.user.id);
+    await interaction.editReply(
+      `아래 링크를 클릭해 BSM 로그인 후 인증을 완료하세요.\n${url}`,
+    );
+  } catch (error) {
+    console.error("Failed to fetch OAuth URL:", error);
+    await interaction.editReply(
+      "인증 링크를 가져오지 못했습니다. 잠시 후 다시 시도해주세요.",
+    );
+  }
 }
 
-export async function handleVerifyStudentIdButton(
-  interaction: ButtonInteraction,
-): Promise<void> {
-  if (interaction.customId !== VERIFY_STUDENT_BUTTON_ID) {
-    return;
+async function fetchOAuthUrl(discordUserId: string): Promise<string> {
+  const backendBaseUrl = process.env.BACKEND_BASE_URL?.trim();
+  if (!backendBaseUrl) {
+    throw new Error("BACKEND_BASE_URL이 설정되지 않았습니다.");
   }
 
-  const modal = new ModalBuilder()
-    .setCustomId(VERIFY_STUDENT_MODAL_ID)
-    .setTitle("학번 입력");
+  const res = await fetch(
+    `${backendBaseUrl}/auth/oauth/bsm/authorize/discord?discordId=${encodeURIComponent(discordUserId)}`,
+  );
 
-  const studentIdInput = new TextInputBuilder()
-    .setCustomId("studentId")
-    .setLabel("학번")
-    .setPlaceholder("예: 3101")
-    .setRequired(true)
-    .setStyle(TextInputStyle.Short)
-    .setMaxLength(20);
-
-  const row =
-    new ActionRowBuilder<TextInputBuilder>().addComponents(studentIdInput);
-  modal.addComponents(row);
-
-  await interaction.showModal(modal);
-}
-
-export async function handleVerifyStudentIdModal(
-  interaction: ModalSubmitInteraction,
-): Promise<void> {
-  if (interaction.customId !== VERIFY_STUDENT_MODAL_ID) {
-    return;
+  if (!res.ok) {
+    throw new Error(`Backend responded with ${res.status}`);
   }
 
-  const context = getVerifyContext(interaction);
-  if (!context.ok) {
-    await interaction.reply({ content: context.message, ephemeral: true });
-    return;
-  }
-
-  const studentId = interaction.fields.getTextInputValue("studentId").trim();
-  if (!studentId) {
-    await interaction.reply({
-      content: "학번을 입력해주세요.",
-      ephemeral: true,
-    });
-    return;
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-  await submitVerification(interaction, context.nickname, studentId);
-}
-
-async function submitVerification(
-  interaction:
-    | ChatInputCommandInteraction
-    | ButtonInteraction
-    | ModalSubmitInteraction,
-  nickname: string,
-  studentId?: string,
-): Promise<void> {
-  const result = await requestVerification({
-    studentId,
-    nickname,
-    discordUserId: interaction.user.id,
-  });
-
-  if (!result.ok) {
-    await interaction.editReply(result.message);
-    return;
-  }
-
-  if (result.duplicate) {
-    const buttonRow =
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(VERIFY_STUDENT_BUTTON_ID)
-          .setLabel("학번 입력")
-          .setStyle(ButtonStyle.Primary),
-      );
-
-    await interaction.editReply({
-      content:
-        result.message ??
-        "동명이인이 있어 추가 확인이 필요합니다. 아래 버튼을 눌러 학번을 입력해주세요.",
-      components: [buttonRow],
-    });
-    return;
-  }
-
-  await interaction.editReply({
-    content: result.message,
-    components: [],
-  });
+  const data = (await res.json()) as { url: string };
+  return data.url;
 }
 
 function getVerifyContext(
-  interaction:
-    | ChatInputCommandInteraction
-    | ButtonInteraction
-    | ModalSubmitInteraction,
+  interaction: ChatInputCommandInteraction | ButtonInteraction,
 ): { ok: true; nickname: string } | { ok: false; message: string } {
   if (!interaction.inGuild()) {
     return {
@@ -225,88 +142,4 @@ function createVerifyStartButtonRow(): ActionRowBuilder<ButtonBuilder> {
       .setLabel("인증 시작")
       .setStyle(ButtonStyle.Success),
   );
-}
-
-async function requestVerification(
-  payload: VerifyPayload,
-): Promise<{ ok: boolean; duplicate: boolean; message: string }> {
-  const backendBaseUrl = process.env.BACKEND_BASE_URL?.trim();
-  if (!backendBaseUrl) {
-    return {
-      ok: false,
-      duplicate: false,
-      message: "봇 설정에 `BACKEND_BASE_URL`이 없습니다. 관리자에게 문의해주세요.",
-    };
-  }
-
-  try {
-    const response = await fetch(`${backendBaseUrl}/discord/verify`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const raw = await response.text();
-    const parsed = tryParseJson<VerifyResult>(raw);
-    const duplicate = isDuplicateResponse(response.status, parsed);
-
-    if (duplicate) {
-      return {
-        ok: true,
-        duplicate: true,
-        message:
-          parsed?.message ??
-          "동명이인이 있어 추가 확인이 필요합니다. 학번을 입력해주세요.",
-      };
-    }
-
-    if (response.ok) {
-      return {
-        ok: true,
-        duplicate: false,
-        message: parsed?.message ?? "인증이 완료되었습니다.",
-      };
-    }
-
-    return {
-      ok: false,
-      duplicate: false,
-      message:
-        parsed?.message ??
-        "인증 요청이 실패했습니다. 잠시 후 다시 시도해주세요.",
-    };
-  } catch (error) {
-    console.error("Failed to call verification API:", error);
-    return {
-      ok: false,
-      duplicate: false,
-      message: "인증 서버에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.",
-    };
-  }
-}
-
-function isDuplicateResponse(
-  statusCode: number,
-  result: VerifyResult | null,
-): boolean {
-  return (
-    statusCode === 409 ||
-    result?.requiresStudentId === true ||
-    result?.status === "duplicate" ||
-    result?.code === "DUPLICATE_STUDENT"
-  );
-}
-
-function tryParseJson<T>(value: string): T | null {
-  if (!value) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return null;
-  }
 }

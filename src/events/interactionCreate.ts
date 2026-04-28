@@ -4,8 +4,6 @@ import {
   handleVerify,
   handleVerifyPanel,
   handleVerifyStartButton,
-  handleVerifyStudentIdButton,
-  handleVerifyStudentIdModal,
 } from "../commands/verify";
 
 export const interactionCreateEvent = {
@@ -13,12 +11,6 @@ export const interactionCreateEvent = {
   async execute(interaction: Interaction): Promise<void> {
     if (interaction.isButton()) {
       await handleVerifyStartButton(interaction);
-      await handleVerifyStudentIdButton(interaction);
-      return;
-    }
-
-    if (interaction.isModalSubmit()) {
-      await handleVerifyStudentIdModal(interaction);
       return;
     }
 
