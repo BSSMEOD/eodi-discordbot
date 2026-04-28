@@ -197,7 +197,7 @@ src/
 DISCORD_TOKEN=your-discord-bot-token
 DISCORD_CLIENT_ID=your-discord-application-client-id
 DISCORD_GUILD_ID=your-test-guild-id
-BACKEND_BASE_URL=http://localhost:8080
+BACKEND_BASE_URL=http://localhost:8000
 ```
 
 설명:
