@@ -8,14 +8,12 @@ import {
   DiscordAPIError,
   Events,
   GatewayIntentBits,
-  Partials,
   REST,
   Routes,
 } from "discord.js";
 
 import { verifyCommandData } from "./commands/verify";
 import { interactionCreateEvent } from "./events/interactionCreate";
-import { messageCreateEvent } from "./events/messageCreate";
 
 const envPath = resolve(process.cwd(), ".env");
 dotenv.config({ path: envPath });
@@ -25,12 +23,7 @@ const clientId = requireEnv("DISCORD_CLIENT_ID");
 const guildId = process.env.DISCORD_GUILD_ID?.trim();
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-  partials: [Partials.Channel],
+  intents: [GatewayIntentBits.Guilds],
 });
 
 client.once(Events.ClientReady, async (readyClient) => {
@@ -46,10 +39,6 @@ client.once(Events.ClientReady, async (readyClient) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   await interactionCreateEvent.execute(interaction);
-});
-
-client.on(Events.MessageCreate, async (message) => {
-  await messageCreateEvent.execute(message);
 });
 
 client.on(Events.Error, (error) => {
