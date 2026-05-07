@@ -1,0 +1,136 @@
+name: CD - Bot Build & Deploy (dev)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: 코드 체크아웃
+      uses: actions/checkout@v4
+
+    - name: 이미지 이름 소문자 변환
+      id: image_name
+      run: |
+        IMAGE_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+        echo "name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
+
+    - name: Docker Buildx 설정
+      uses: docker/setup-buildx-action@v3
+
+    - name: GitHub Container Registry 로그인
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Docker 메타데이터 추출
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ steps.image_name.outputs.name }}
+        tags: |
+          type=ref,event=branch
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Docker 이미지 빌드 및 푸시
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        platforms: linux/amd64
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha,scope=eodi-bot-build
+        cache-to: type=gha,scope=eodi-bot-build,mode=max
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    steps:
+    - name: 서버에 SSH 접속 및 Docker Compose 배포
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SSH_HOST }}
+        username: ${{ secrets.SSH_USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        port: ${{ secrets.SSH_PORT || 22 }}
+        script: |
+          set -e
+
+          mkdir -p ~/eodi-discordbot
+          cd ~/eodi-discordbot
+
+          if [ -d ".git" ]; then
+            echo "기존 저장소 업데이트 중..."
+            git fetch origin main
+            git reset --hard origin/main
+          else
+            echo "저장소 복제 중..."
+            rm -rf * .* 2>/dev/null || true
+            git clone https://github.com/${{ github.repository }}.git .
+          fi
+
+          REPO_LOWERCASE=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          cat > .env << EOF
+          GITHUB_REPOSITORY=${REPO_LOWERCASE}
+          DISCORD_TOKEN=${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}
+          DISCORD_GUILD_ID=${{ secrets.DISCORD_GUILD_ID }}
+          BACKEND_BASE_URL=${{ secrets.BACKEND_BASE_URL }}
+          BSM_DISCORD_VERIFY_URL=${{ secrets.BSM_DISCORD_VERIFY_URL }}
+          EOF
+
+          echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+          echo "🚀 Bot Docker Compose 배포 시작 (dev)"
+          for i in 1 2 3; do
+            echo "Docker 이미지 pull 시도 ${i}/3..."
+            docker compose -f docker-compose.yml pull && break
+            echo "Pull 실패, 30초 후 재시도..."
+            [ $i -lt 3 ] && sleep 30 || { echo "❌ Pull 최종 실패"; exit 1; }
+          done
+          docker compose -f docker-compose.yml down
+          docker compose -f docker-compose.yml up -d --remove-orphans
+
+          sleep 5
+          docker compose -f docker-compose.yml ps
+          docker image prune -af
+
+    - name: 배포 상태 확인
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SSH_HOST }}
+        username: ${{ secrets.SSH_USERNAME }}
+        key: ${{ secrets.SSH_KEY }}
+        port: ${{ secrets.SSH_PORT || 22 }}
+        script: |
+          set -e
+          cd ~/eodi-discordbot
+          echo "🐳 컨테이너 실행 상태:"
+          docker compose -f docker-compose.yml ps
+
+          if ! docker compose -f docker-compose.yml ps | grep -q "eodi-discordbot-dev.*Up"; then
+            echo "❌ ERROR: bot 컨테이너가 실행되지 않았습니다!"
+            docker compose -f docker-compose.yml logs --tail=100 bot
+            exit 1
+          fi
+          echo "✅ bot 컨테이너 정상 실행"
+
+          echo "📝 봇 로그 (최근 50줄):"
+          docker compose -f docker-compose.yml logs --tail=50 bot || true

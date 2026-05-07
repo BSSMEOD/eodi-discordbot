@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 import dotenv from "dotenv";
-import express from "express";
 
 import {
   Client,
@@ -16,7 +15,7 @@ import {
 
 import { verifyCommandData } from "./commands/verify";
 import { interactionCreateEvent } from "./events/interactionCreate";
-import { createNotifyRouter } from "./notify/notifyRouter";
+import { messageCreateEvent } from "./events/messageCreate";
 
 const envPath = resolve(process.cwd(), ".env");
 dotenv.config({ path: envPath });
@@ -24,7 +23,6 @@ dotenv.config({ path: envPath });
 const token = requireEnv("DISCORD_TOKEN");
 const clientId = requireEnv("DISCORD_CLIENT_ID");
 const guildId = process.env.DISCORD_GUILD_ID?.trim();
-const port = Number(process.env.PORT?.trim() ?? "3000");
 
 const client = new Client({
   intents: [
@@ -40,7 +38,6 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   try {
     await registerCommands(token, clientId, guildId);
-    startHttpServer(client, port);
   } catch (error) {
     logCommandRegistrationError(error, clientId, guildId);
     process.exit(1);
@@ -49,6 +46,10 @@ client.once(Events.ClientReady, async (readyClient) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   await interactionCreateEvent.execute(interaction);
+});
+
+client.on(Events.MessageCreate, async (message) => {
+  await messageCreateEvent.execute(message);
 });
 
 client.on(Events.Error, (error) => {
@@ -120,14 +121,4 @@ function logCommandRegistrationError(
   }
 
   console.error("Failed to register application commands:", error);
-}
-
-function startHttpServer(client: Client, serverPort: number): void {
-  const app = express();
-  app.use(express.json());
-  app.use(createNotifyRouter(client));
-
-  app.listen(serverPort, () => {
-    console.log(`HTTP server listening on port ${serverPort}`);
-  });
 }

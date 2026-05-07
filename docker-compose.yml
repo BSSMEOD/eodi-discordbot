@@ -1,0 +1,23 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY:-bssmeod/eodi-discordbot}:latest
+    container_name: eodi-discordbot-dev
+    restart: always
+    init: true
+    environment:
+      NODE_ENV: production
+      TZ: Asia/Seoul
+      DISCORD_TOKEN: ${DISCORD_TOKEN:-}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      BACKEND_BASE_URL: ${BACKEND_BASE_URL:-}
+      BSM_DISCORD_VERIFY_URL: ${BSM_DISCORD_VERIFY_URL:-}
+    networks:
+      - eodi-discordbot-net-dev
+
+networks:
+  eodi-discordbot-net-dev:
+    driver: bridge

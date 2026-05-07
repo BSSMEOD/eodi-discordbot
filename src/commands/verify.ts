@@ -11,6 +11,7 @@ import {
 } from "discord.js";
 
 const NICKNAME_PATTERN = /^\d+기_[^_]+$/;
+const DEFAULT_VERIFY_PAGE_URL = "https://www.jojaemin.com/discord-verify";
 export const VERIFY_START_BUTTON_ID = "verify-start";
 
 export const verifyCommand = new SlashCommandBuilder()
@@ -70,37 +71,31 @@ export async function handleVerifyStartButton(
 async function sendOAuthLink(
   interaction: ChatInputCommandInteraction | ButtonInteraction,
 ): Promise<void> {
-  await interaction.deferReply({ ephemeral: true });
-
-  try {
-    const url = await fetchOAuthUrl(interaction.user.id);
-    await interaction.editReply(
-      `아래 링크를 클릭해 BSM 로그인 후 인증을 완료하세요.\n${url}`,
-    );
-  } catch (error) {
-    console.error("Failed to fetch OAuth URL:", error);
-    await interaction.editReply(
-      "인증 링크를 가져오지 못했습니다. 잠시 후 다시 시도해주세요.",
-    );
-  }
+  const url = buildVerifyPageUrl(interaction.user.id);
+  await interaction.reply({
+    content: `아래 링크를 클릭해 BSM 로그인 후 인증을 완료하세요.\n${url}`,
+    ephemeral: true,
+  });
 }
 
-async function fetchOAuthUrl(discordUserId: string): Promise<string> {
-  const backendBaseUrl = process.env.BACKEND_BASE_URL?.trim();
-  if (!backendBaseUrl) {
-    throw new Error("BACKEND_BASE_URL이 설정되지 않았습니다.");
+function buildVerifyPageUrl(discordUserId: string): string {
+  const url = resolveVerifyBaseUrl();
+  url.searchParams.set("discordId", discordUserId);
+  return url.toString();
+}
+
+function resolveVerifyBaseUrl(): URL {
+  const configured = process.env.BSM_DISCORD_VERIFY_URL?.trim();
+  if (configured) {
+    try {
+      return new URL(configured);
+    } catch {
+      console.warn(
+        `BSM_DISCORD_VERIFY_URL이 올바른 URL 형식이 아닙니다: "${configured}". 기본값으로 대체합니다.`,
+      );
+    }
   }
-
-  const res = await fetch(
-    `${backendBaseUrl}/auth/oauth/bsm/authorize/discord?discordId=${encodeURIComponent(discordUserId)}`,
-  );
-
-  if (!res.ok) {
-    throw new Error(`Backend responded with ${res.status}`);
-  }
-
-  const data = (await res.json()) as { url: string };
-  return data.url;
+  return new URL(DEFAULT_VERIFY_PAGE_URL);
 }
 
 function getVerifyContext(
